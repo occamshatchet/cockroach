@@ -36,6 +36,7 @@ import (
 	// can not import xxx.pb with rpc stub here,
 	// because it will cause import cycle.
 
+	"github.com/cockroachdb/cockroach/base"
 	"github.com/cockroachdb/cockroach/rpc/codec/message"
 	"github.com/cockroachdb/cockroach/util"
 	"github.com/cockroachdb/cockroach/util/log"
@@ -112,7 +113,7 @@ func listenAndServeArithAndEchoService(network, addr string) (net.Addr, error) {
 				log.Infof("clients.Accept(): %v\n", err)
 				continue
 			}
-			go srv.ServeCodec(NewServerCodec(conn))
+			go srv.ServeCodec(NewServerCodec(conn, &base.Context{Insecure: true}, nil))
 		}
 	}()
 	return clients.Addr(), nil
@@ -386,7 +387,7 @@ func benchmarkEchoProtoRPC(b *testing.B, size int) {
 	if *startEchoServer {
 		l, err := listenAndServeEchoService("tcp", *echoAddr,
 			func(srv *rpc.Server, conn io.ReadWriteCloser) {
-				go srv.ServeCodec(NewServerCodec(conn))
+				go srv.ServeCodec(NewServerCodec(conn, &base.Context{Insecure: true}, nil))
 			})
 		if err != nil {
 			b.Fatal("could not start server")

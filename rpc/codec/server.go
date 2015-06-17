@@ -24,11 +24,17 @@ package codec
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/rpc"
+	"reflect"
 
+	"github.com/cockroachdb/cockroach/base"
+	cockroach_proto "github.com/cockroachdb/cockroach/proto"
 	"github.com/cockroachdb/cockroach/rpc/codec/wire"
+	"github.com/cockroachdb/cockroach/security"
+	"github.com/cockroachdb/cockroach/util"
 	"github.com/gogo/protobuf/proto"
 )
 
@@ -36,6 +42,10 @@ type serverCodec struct {
 	baseConn
 
 	methods []string
+
+	// Connection state and server context.
+	tlsState *tls.ConnectionState
+	context  *base.Context
 
 	// temporary work space
 	respBodyBuf   bytes.Buffer
@@ -46,13 +56,15 @@ type serverCodec struct {
 
 // NewServerCodec returns a serverCodec that communicates with the ClientCodec
 // on the other end of the given conn.
-func NewServerCodec(conn io.ReadWriteCloser) rpc.ServerCodec {
+func NewServerCodec(conn io.ReadWriteCloser, ctx *base.Context, tlsState *tls.ConnectionState) rpc.ServerCodec {
 	return &serverCodec{
 		baseConn: baseConn{
 			r: bufio.NewReader(conn),
 			w: bufio.NewWriter(conn),
 			c: conn,
 		},
+		tlsState: tlsState,
+		context:  ctx,
 	}
 }
 
@@ -95,8 +107,44 @@ func (c *serverCodec) ReadRequestBody(x interface{}) error {
 	if err != nil {
 		return err
 	}
-
 	c.reqHeader.Reset()
+
+	req := reflect.ValueOf(request)
+	// For anything other than ping requests, extract the user and check it.
+	// TODO(marc): we should probably still check something for pings.
+	if req.Type().String() != "*proto.PingRequest" &&
+		req.Type().String() != "*proto.GossipRequest" {
+		// Extract Header.User from the request, excluding Ping requests.
+		// TODO: How much of this do we want to split into separate checks?
+		header := reflect.ValueOf(request).Elem().FieldByName("RequestHeader")
+		if !header.IsValid() {
+			return util.Errorf("missing RequestHeader in request: %s", reflect.ValueOf(request))
+		}
+
+		hdr, ok := header.Interface().(cockroach_proto.RequestHeader)
+		if !ok {
+			return util.Errorf("bad RequestHeader in request: %s", header.Type())
+		}
+
+		if len(hdr.User) == 0 {
+			return util.Errorf("missing User in request header: %s", hdr)
+		}
+
+		user := hdr.User
+
+		if !c.context.Insecure {
+			// Make sure the client certificate is for this user.
+			certUser, err := security.GetCertificateUser(c.tlsState)
+			if err != nil {
+				return util.Errorf("unauthorized: %s", err)
+			}
+			// The "node" user is allowed to do anything on behalf of other users.
+			if certUser != security.NodeUser && certUser != user {
+				return util.Errorf("requested user is %s, but certificate is for %s", user, certUser)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -176,13 +224,6 @@ func (c *serverCodec) readRequestHeader(r *bufio.Reader, header *wire.RequestHea
 func (c *serverCodec) readRequestBody(r *bufio.Reader, header *wire.RequestHeader,
 	request proto.Message) error {
 	return c.recvProto(request, header.UncompressedSize, decompressors[header.Compression])
-}
-
-// ServeConn runs the Protobuf-RPC server on a single connection.
-// ServeConn blocks, serving the connection until the client hangs up.
-// The caller typically invokes ServeConn in a go statement.
-func ServeConn(conn io.ReadWriteCloser) {
-	rpc.ServeCodec(NewServerCodec(conn))
 }
 
 type marshalTo interface {

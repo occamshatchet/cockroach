@@ -18,6 +18,7 @@
 package rpc
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -88,9 +89,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	// TODO(marc): figure out the right way to do authentication,
-	// and how to pass verified credentials.
-	security.LogRequestCertificates(r)
 
 	// Note: this code was adapted from net/rpc.Server.ServeHTTP.
 	if r.Method != "CONNECT" {
@@ -104,8 +102,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Infof("rpc hijacking %s: %s", r.RemoteAddr, err)
 		return
 	}
+	security.LogTLSState("RPC", r.TLS)
 	io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
-	s.serveConn(conn)
+	s.serveConn(conn, r.TLS)
 }
 
 // Listen listens on the configured address but does not start
@@ -217,8 +216,8 @@ func (s *Server) Close() {
 
 // serveConn synchronously serves a single connection. When the
 // connection is closed, close callbacks are invoked.
-func (s *Server) serveConn(conn net.Conn) {
-	s.ServeCodec(codec.NewServerCodec(conn))
+func (s *Server) serveConn(conn net.Conn, tlsState *tls.ConnectionState) {
+	s.ServeCodec(codec.NewServerCodec(conn, &s.context.Context, tlsState))
 	s.mu.Lock()
 	if s.closeCallbacks != nil {
 		for _, cb := range s.closeCallbacks {
