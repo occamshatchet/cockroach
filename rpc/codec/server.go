@@ -111,7 +111,7 @@ func (c *serverCodec) authenticateRequest(request proto.Message) error {
 		if len(requestedUser) == 0 {
 			return util.Errorf("missing User in request header: %+v", header)
 		}
-	case *cockroach_proto.PingRequest, *cockroach_proto.GossipRequest:
+	case *cockroach_proto.PingRequest, *cockroach_proto.GossipRequest, *cockroach_proto.RaftMessageRequest:
 		// Ping and Gossip requests do not have a header: require the node user.
 		// TODO(marc): it may be worth it to make them implement Request.
 		requestedUser = security.NodeUser

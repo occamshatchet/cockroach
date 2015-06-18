@@ -36,13 +36,14 @@ func init() {
 func TestClientHeartbeat(t *testing.T) {
 	addr := util.CreateTestAddr("tcp")
 
+	// Heartbeats are node-to-node requests: use server context for both server and client.
 	s := NewServer(addr, serverTestBaseContext)
 	if err := s.Start(); err != nil {
 		t.Fatal(err)
 	}
-	c := NewClient(s.Addr(), nil, clientTestBaseContext)
+	c := NewClient(s.Addr(), nil, serverTestBaseContext)
 	<-c.Ready
-	if c != NewClient(s.Addr(), nil, clientTestBaseContext) {
+	if c != NewClient(s.Addr(), nil, serverTestBaseContext) {
 		t.Fatal("expected cached client to be returned while healthy")
 	}
 	<-c.Ready
