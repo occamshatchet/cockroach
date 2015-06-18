@@ -31,7 +31,6 @@ import (
 
 	"github.com/cockroachdb/cockroach/base"
 	cockroach_proto "github.com/cockroachdb/cockroach/proto"
-	"github.com/cockroachdb/cockroach/rpc/codec/message"
 	"github.com/cockroachdb/cockroach/rpc/codec/wire"
 	"github.com/cockroachdb/cockroach/security"
 	"github.com/cockroachdb/cockroach/util"
@@ -101,24 +100,16 @@ func (c *serverCodec) authenticateRequest(request proto.Message) error {
 	var requestedUser string
 
 	switch request := request.(type) {
-	case cockroach_proto.Request:
+	case cockroach_proto.RequestWithUser:
 		// Request interface: this covers most requests.
-		header := request.Header()
-		if header == nil {
-			return util.Errorf("missing header in request: %+v", request)
-		}
-		requestedUser = header.GetUser()
+		requestedUser = request.GetUser()
 		if len(requestedUser) == 0 {
-			return util.Errorf("missing User in request header: %+v", header)
+			return util.Errorf("missing User in request: %+v", request)
 		}
 	case *cockroach_proto.PingRequest, *cockroach_proto.GossipRequest, *cockroach_proto.RaftMessageRequest:
 		// Ping and Gossip requests do not have a header: require the node user.
 		// TODO(marc): it may be worth it to make them implement Request.
 		requestedUser = security.NodeUser
-	case *message.EchoRequest, *message.ArithRequest:
-		// These are for testing purposes only.
-		// TODO(marc): make them implement Request.
-		return nil
 	default:
 		return util.Errorf("unknown request type: %T", request)
 	}

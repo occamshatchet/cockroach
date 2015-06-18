@@ -86,6 +86,12 @@ type Request interface {
 	flags() int
 }
 
+// RequestWithUser is an interface for RPC requests that have a "requested user".
+type RequestWithUser interface {
+	// GetUser returns the user from the request.
+	GetUser() string
+}
+
 // Response is an interface for RPC responses.
 type Response interface {
 	gogoproto.Message
