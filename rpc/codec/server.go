@@ -119,7 +119,7 @@ func (c *serverCodec) userFromRequest(request proto.Message) (string, error) {
 // For requests with a RequestHeader, we compare the header.User against
 // the client certificate Subject.CommonName.
 // For other requests, we either allow all (test requests), or
-// required the "node user".
+// require the "node user".
 func (c *serverCodec) authenticateRequest(request proto.Message) error {
 	var err error
 	var requestedUser string
