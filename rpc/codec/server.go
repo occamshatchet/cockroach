@@ -101,7 +101,7 @@ func (c *serverCodec) authenticateRequest(request proto.Message) error {
 	}
 
 	// Extract user and verify.
-	// TODO(marc): we may eventually need stricted user syntax rules.
+	// TODO(marc): we may eventually need stricter user syntax rules.
 	requestedUser := requestWithUser.GetUser()
 	if len(requestedUser) == 0 {
 		return util.Errorf("missing User in request: %+v", request)
