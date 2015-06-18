@@ -28,7 +28,6 @@ import (
 	"fmt"
 	"io"
 	"net/rpc"
-	"reflect"
 
 	"github.com/cockroachdb/cockroach/base"
 	cockroach_proto "github.com/cockroachdb/cockroach/proto"
@@ -92,29 +91,6 @@ func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
 	return nil
 }
 
-// userFromRequest takes a request proto and attemps to access
-// request.RequestHeader.User.
-func (c *serverCodec) userFromRequest(request proto.Message) (string, error) {
-	// Extract Header.User from the request, excluding Ping requests.
-	// TODO: How much of this do we want to split into separate checks?
-	header := reflect.ValueOf(request).Elem().FieldByName("RequestHeader")
-	if !header.IsValid() {
-		return "", util.Errorf("missing RequestHeader in request: %s",
-			reflect.ValueOf(request))
-	}
-
-	hdr, ok := header.Interface().(cockroach_proto.RequestHeader)
-	if !ok {
-		return "", util.Errorf("bad RequestHeader in request: %s", header.Type())
-	}
-
-	if len(hdr.User) == 0 {
-		return "", util.Errorf("missing User in request header: %s", hdr)
-	}
-
-	return hdr.User, nil
-}
-
 // authenticateRequest takes a request proto and attempts to authenticate it.
 // For requests with a RequestHeader, we compare the header.User against
 // the client certificate Subject.CommonName.
@@ -125,17 +101,26 @@ func (c *serverCodec) authenticateRequest(request proto.Message) error {
 	var requestedUser string
 
 	switch request := request.(type) {
+	case cockroach_proto.Request:
+		// Request interface: this covers most requests.
+		header := request.Header()
+		if header == nil {
+			return util.Errorf("missing header in request: %+v", request)
+		}
+		requestedUser = header.GetUser()
+		if len(requestedUser) == 0 {
+			return util.Errorf("missing User in request header: %+v", header)
+		}
 	case *cockroach_proto.PingRequest, *cockroach_proto.GossipRequest:
 		// Ping and Gossip requests do not have a header: require the node user.
+		// TODO(marc): it may be worth it to make them implement Request.
 		requestedUser = security.NodeUser
 	case *message.EchoRequest, *message.ArithRequest:
 		// These are for testing purposes only.
+		// TODO(marc): make them implement Request.
 		return nil
 	default:
-		requestedUser, err = c.userFromRequest(request)
-		if err != nil {
-			return err
-		}
+		return util.Errorf("unknown request type: %T", request)
 	}
 
 	if c.context.Insecure {
