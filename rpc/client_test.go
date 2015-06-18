@@ -115,9 +115,10 @@ func TestOffsetMeasurement(t *testing.T) {
 	}
 
 	// Create a client that is 10 nanoseconds behind the server.
+	// Use the server context (heartbeat is node-to-node).
 	advancing := AdvancingClock{time: 0, advancementInterval: 10}
 	clientClock := hlc.NewClock(advancing.UnixNano)
-	context := NewTestContext(clientClock)
+	context := NewServerTestContext(clientClock)
 	c := NewClient(s.Addr(), nil, context)
 	<-c.Ready
 
@@ -163,7 +164,7 @@ func TestDelayedOffsetMeasurement(t *testing.T) {
 		advancementInterval: maximumClockReadingDelay.Nanoseconds() + 1,
 	}
 	clientClock := hlc.NewClock(advancing.UnixNano)
-	context := NewTestContext(clientClock)
+	context := NewServerTestContext(clientClock)
 	c := NewClient(s.Addr(), nil, context)
 	<-c.Ready
 
@@ -205,7 +206,7 @@ func TestFailedOffestMeasurement(t *testing.T) {
 	// Create a client that never receives a heartbeat after the first.
 	clientManual := hlc.NewManualClock(0)
 	clientClock := hlc.NewClock(clientManual.UnixNano)
-	context := NewTestContext(clientClock)
+	context := NewServerTestContext(clientClock)
 	c := NewClient(s.Addr(), nil, context)
 	heartbeat.ready <- struct{}{} // Allow one heartbeat for initialization.
 	<-c.Ready
