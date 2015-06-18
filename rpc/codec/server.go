@@ -91,27 +91,20 @@ func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
 }
 
 // authenticateRequest takes a request proto and attempts to authenticate it.
-// For requests with a RequestHeader, we compare the header.User against
-// the client certificate Subject.CommonName.
-// For other requests, we either allow all (test requests), or
-// require the "node user".
+// Requests need to implement RequestWithUser.
+// We compare the header.User against the client certificate Subject.CommonName.
 func (c *serverCodec) authenticateRequest(request proto.Message) error {
-	var err error
-	var requestedUser string
-
-	switch request := request.(type) {
-	case cockroach_proto.RequestWithUser:
-		// Request interface: this covers most requests.
-		requestedUser = request.GetUser()
-		if len(requestedUser) == 0 {
-			return util.Errorf("missing User in request: %+v", request)
-		}
-	case *cockroach_proto.PingRequest, *cockroach_proto.GossipRequest, *cockroach_proto.RaftMessageRequest:
-		// Ping and Gossip requests do not have a header: require the node user.
-		// TODO(marc): it may be worth it to make them implement Request.
-		requestedUser = security.NodeUser
-	default:
+	// RequestWithUser must be implemented.
+	requestWithUser, ok := request.(cockroach_proto.RequestWithUser)
+	if !ok {
 		return util.Errorf("unknown request type: %T", request)
+	}
+
+	// Extract user and verify.
+	// TODO(marc): we may eventually need stricted user syntax rules.
+	requestedUser := requestWithUser.GetUser()
+	if len(requestedUser) == 0 {
+		return util.Errorf("missing User in request: %+v", request)
 	}
 
 	if c.context.Insecure {
@@ -119,14 +112,14 @@ func (c *serverCodec) authenticateRequest(request proto.Message) error {
 		return nil
 	}
 
-	// Make sure the client certificate is for this user.
+	// Verify client certificate and extract user from Subject.CommonName.
 	certUser, err := security.GetCertificateUser(c.tlsState)
 	if err != nil {
 		return util.Errorf("unauthorized: %s", err)
 	}
-	// The "node" user is allowed to do anything on behalf of other users.
-	// TODO(marc): this doesn't seem right.
-	if certUser != security.NodeUser && certUser != requestedUser {
+
+	// Check that users match.
+	if certUser != requestedUser {
 		return util.Errorf("requested user is %s, but certificate is for %s",
 			requestedUser, certUser)
 	}
