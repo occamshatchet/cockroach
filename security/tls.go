@@ -188,7 +188,7 @@ func LogTLSState(method string, tlsState *tls.ConnectionState) {
 	peerCerts := []string{}
 	verifiedChain := []string{}
 	for _, cert := range tlsState.PeerCertificates {
-		peerCerts = append(peerCerts, fmt.Sprintf("%s (%s, %s)", cert.Subject.CommonName, cert.DNSNames, cert.IPAddresses))
+		peerCerts = append(peerCerts, cert.Subject.CommonName)
 	}
 	for _, chain := range tlsState.VerifiedChains {
 		subjects := []string{}

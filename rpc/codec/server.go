@@ -32,6 +32,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/base"
 	cockroach_proto "github.com/cockroachdb/cockroach/proto"
+	"github.com/cockroachdb/cockroach/rpc/codec/message"
 	"github.com/cockroachdb/cockroach/rpc/codec/wire"
 	"github.com/cockroachdb/cockroach/security"
 	"github.com/cockroachdb/cockroach/util"
@@ -91,6 +92,72 @@ func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
 	return nil
 }
 
+// userFromRequest takes a request proto and attemps to access
+// request.RequestHeader.User.
+func (c *serverCodec) userFromRequest(request proto.Message) (string, error) {
+	// Extract Header.User from the request, excluding Ping requests.
+	// TODO: How much of this do we want to split into separate checks?
+	header := reflect.ValueOf(request).Elem().FieldByName("RequestHeader")
+	if !header.IsValid() {
+		return "", util.Errorf("missing RequestHeader in request: %s",
+			reflect.ValueOf(request))
+	}
+
+	hdr, ok := header.Interface().(cockroach_proto.RequestHeader)
+	if !ok {
+		return "", util.Errorf("bad RequestHeader in request: %s", header.Type())
+	}
+
+	if len(hdr.User) == 0 {
+		return "", util.Errorf("missing User in request header: %s", hdr)
+	}
+
+	return hdr.User, nil
+}
+
+// authenticateRequest takes a request proto and attempts to authenticate it.
+// For requests with a RequestHeader, we compare the header.User against
+// the client certificate Subject.CommonName.
+// For other requests, we either allow all (test requests), or
+// required the "node user".
+func (c *serverCodec) authenticateRequest(request proto.Message) error {
+	var err error
+	var requestedUser string
+
+	switch request := request.(type) {
+	case *cockroach_proto.PingRequest, *cockroach_proto.GossipRequest:
+		// Ping and Gossip requests do not have a header: require the node user.
+		requestedUser = security.NodeUser
+	case *message.EchoRequest, *message.ArithRequest:
+		// These are for testing purposes only.
+		return nil
+	default:
+		requestedUser, err = c.userFromRequest(request)
+		if err != nil {
+			return err
+		}
+	}
+
+	if c.context.Insecure {
+		// Insecure mode: trust the user in the header.
+		return nil
+	}
+
+	// Make sure the client certificate is for this user.
+	certUser, err := security.GetCertificateUser(c.tlsState)
+	if err != nil {
+		return util.Errorf("unauthorized: %s", err)
+	}
+	// The "node" user is allowed to do anything on behalf of other users.
+	// TODO(marc): this doesn't seem right.
+	if certUser != security.NodeUser && certUser != requestedUser {
+		return util.Errorf("requested user is %s, but certificate is for %s",
+			requestedUser, certUser)
+	}
+
+	return nil
+}
+
 func (c *serverCodec) ReadRequestBody(x interface{}) error {
 	if x == nil {
 		return nil
@@ -109,43 +176,7 @@ func (c *serverCodec) ReadRequestBody(x interface{}) error {
 	}
 	c.reqHeader.Reset()
 
-	req := reflect.ValueOf(request)
-	// For anything other than ping requests, extract the user and check it.
-	// TODO(marc): we should probably still check something for pings.
-	if req.Type().String() != "*proto.PingRequest" &&
-		req.Type().String() != "*proto.GossipRequest" {
-		// Extract Header.User from the request, excluding Ping requests.
-		// TODO: How much of this do we want to split into separate checks?
-		header := reflect.ValueOf(request).Elem().FieldByName("RequestHeader")
-		if !header.IsValid() {
-			return util.Errorf("missing RequestHeader in request: %s", reflect.ValueOf(request))
-		}
-
-		hdr, ok := header.Interface().(cockroach_proto.RequestHeader)
-		if !ok {
-			return util.Errorf("bad RequestHeader in request: %s", header.Type())
-		}
-
-		if len(hdr.User) == 0 {
-			return util.Errorf("missing User in request header: %s", hdr)
-		}
-
-		user := hdr.User
-
-		if !c.context.Insecure {
-			// Make sure the client certificate is for this user.
-			certUser, err := security.GetCertificateUser(c.tlsState)
-			if err != nil {
-				return util.Errorf("unauthorized: %s", err)
-			}
-			// The "node" user is allowed to do anything on behalf of other users.
-			if certUser != security.NodeUser && certUser != user {
-				return util.Errorf("requested user is %s, but certificate is for %s", user, certUser)
-			}
-		}
-	}
-
-	return nil
+	return c.authenticateRequest(request)
 }
 
 func (c *serverCodec) WriteResponse(r *rpc.Response, x interface{}) error {
